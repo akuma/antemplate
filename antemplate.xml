@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE project>
+<project name="antemplate" basedir=".">
+
+    <!-- External Ant Tasks -->
+    <taskdef file="antemplateTasks.properties" />
+    <taskdef resource="net/sf/antcontrib/antcontrib.properties" />
+    <typedef resource="org/tigris/subversion/svnant/svnantlib.xml" />
+
+    <property file="antemplate.properties" />
+
+    <property environment="env" />
+
+    <!-- 从 Jenkins 里读取 svn revision -->
+    <property name="svn.lastCommitRevision" value="${env.SVN_REVISION}" />
+
+    <property name="catalina.home" value="${env.CATALINA_HOME}" />
+    <if>
+        <not>
+            <isset property="catalina.home" />
+        </not>
+        <then>
+            <property name="catalina.home" value="${tomcat.home}" />
+        </then>
+    </if>
+
+    <available file="${catalina.home}/common/lib" type="dir" property="tomcat5.used" />
+    <available file="${catalina.home}/lib" type="dir" property="tomcat6.used" />
+    <available file="${lib.dir}" type="dir" property="lib.used" />
+    <available file="${web.dir}/WEB-INF/lib" type="dir" property="weblib.used" />
+
+    <fileset id="classes.refid" dir="${classes.dir}" />
+
+    <path id="classpath">
+        <fileset dir="${web.dir}/WEB-INF">
+            <include name="lib/*.jar" if="weblib.used" />
+        </fileset>
+        <fileset dir="${basedir}">
+            <include name="${lib.dir}/*.jar" if="lib.used" />
+        </fileset>
+        <fileset dir="${catalina.home}">
+            <include name="common/lib/servlet*.jar" if="tomcat5.used" />
+            <include name="lib/*-api.jar" if="tomcat6.used" />
+        </fileset>
+        <pathelement path="${classes.dir}" />
+    </path>
+
+    <path id="classpath.boot">
+        <fileset dir="${env.JAVA_HOME}/jre/lib">
+            <include name="*.jar" />
+        </fileset>
+    </path>
+
+    <tstamp>
+        <format property="date.today" pattern="yyyyMMdd" />
+    </tstamp>
+
+    <macrodef name="compile" description="Compile java source files">
+        <attribute name="src.dir" default="${src.dir}" />
+        <attribute name="classes.dir" default="${classes.dir}" />
+        <attribute name="debug" default="${compile.debug}" />
+        <attribute name="deprecation" default="${compile.deprecation}" />
+        <attribute name="failonerror" default="${compile.failonerror}" />
+        <attribute name="optimize" default="${compile.optimize}" />
+        <attribute name="fork" default="${compile.fork}" />
+        <attribute name="source" default="${compile.source}" />
+        <attribute name="target" default="${compile.target}" />
+        <attribute name="encoding" default="${compile.encoding}" />
+        <attribute name="verbose" default="${compile.verbose}" />
+        <sequential>
+            <mkdir dir="@{classes.dir}" />
+            <javac includeantruntime="false"
+                   destdir="@{classes.dir}"
+                   debug="@{debug}"
+                   deprecation="@{deprecation}"
+                   failonerror="@{failonerror}"
+                   optimize="@{optimize}"
+                   fork="@{fork}"
+                   source="@{source}"
+                   target="@{target}"
+                   encoding="@{encoding}"
+                   verbose="@{verbose}"
+                   bootclasspathref="classpath.boot">
+                <src path="@{src.dir}" />
+                <classpath refid="classpath" />
+            </javac>
+            <copy todir="@{classes.dir}" preservelastmodified="true" verbose="true">
+                <fileset dir="@{src.dir}">
+                    <exclude name="**/*.java" />
+                    <exclude name="**/*.bak" />
+                    <exclude name=".*/**" />
+                    <exclude name=".#**" />
+                </fileset>
+            </copy>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="jar-class" description="Macrodef for jar the classes">
+        <attribute name="app.name" />
+        <attribute name="app.version" />
+        <attribute name="app.vendor" default="${app.vendor}" />
+        <attribute name="destfile" />
+        <attribute name="mainclass" default="" />
+        <element name="zipfilesets" />
+
+        <sequential>
+            <mkdir dir="${dist.dir}/${date.today}" />
+            <jar destfile="${dist.dir}/${date.today}/@{destfile}">
+                <zipfilesets />
+                <manifest>
+                    <attribute name="Built-By" value="${user.name}" />
+                    <attribute name="Implementation-Title" value="@{app.name}" />
+                    <attribute name="Implementation-Vendor" value="@{app.vendor}" />
+                    <attribute name="Implementation-Version" value="@{app.version}" />
+                    <attribute name="Main-Class" value="@{mainclass}" />
+                </manifest>
+            </jar>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="war-app" description="Macrodef for packaging application as WAR">
+        <attribute name="app.name" />
+        <attribute name="app.version" />
+        <attribute name="app.qualifier" default="test" />
+        <attribute name="app.profile" default="@{app.qualifier}" />
+        <attribute name="app.vendor" default="${app.vendor}" />
+        <attribute name="classes.refid" default="classes.refid" />
+        <attribute name="compile.target" default="compile" />
+        <element name="resource-prepare" optional="true" />
+
+        <sequential>
+            <antcall target="clean-build" />
+            <antcall target="@{compile.target}" />
+
+            <mkdir dir="${dist.dir}/${date.today}" />
+
+            <resource-prepare />
+            <!--
+                <svn-status />
+            -->
+
+            <property name="war-filename"
+                      value="@{app.name}-@{app.version}-r${svn.lastCommitRevision}-@{app.qualifier}.war" />
+            <war destfile="${dist.dir}/${date.today}/${war-filename}"
+                 webxml="${web.dir}/WEB-INF/web.xml"
+                 duplicate="preserve">
+                <classes dir="${src.dir}/@{app.profile}" />
+                <classes refid="@{classes.refid}" />
+                <zipfileset dir="${web.dir}">
+                    <include name="**/*.*" />
+                    <exclude name="**/web.xml" />
+                    <exclude name="**/classes/**" />
+                </zipfileset>
+                <manifest>
+                    <attribute name="Built-By" value="${user.name}" />
+                    <attribute name="Implementation-Title" value="@{app.name}" />
+                    <attribute name="Implementation-Vendor" value="@{app.vendor}" />
+                    <attribute name="Implementation-Version" value="@{app.version}" />
+                    <attribute name="Implementation-Qualifier" value="@{app.qualifier}" />
+                    <attribute name="Implementation-Profile" value="@{app.profile}" />
+                    <attribute name="Implementation-Timestamp" value="${date.today}" />
+                    <attribute name="Implementation-Revision" value="r${svn.lastCommitRevision}" />
+                </manifest>
+            </war>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="war-app-publish" description="Macrodef for packaging application as WAR &amp; upload war &amp; tag">
+        <attribute name="app.name" />
+        <attribute name="app.version" />
+        <attribute name="app.qualifier" />
+        <attribute name="app.profile" default="@{app.qualifier}" />
+        <attribute name="app.vendor" default="${app.vendor}" />
+        <attribute name="classes.refid" default="classes.refid" />
+        <attribute name="compile.target" default="compile" />
+        <element name="resource-prepare" optional="true" />
+
+        <sequential>
+            <antcall target="clean-build" />
+            <antcall target="@{compile.target}" />
+
+            <mkdir dir="${dist.dir}/${date.today}" />
+
+            <resource-prepare />
+
+            <replacevalue text="${app.version}"
+                          regex="(\d+\.\d+)(\.\d+)*"
+                          replacement="$1"
+                          property="app.version.major" />
+            <echo message="App's major version is: ${app.version.major}" />
+
+            <property name="war-filename"
+                      value="@{app.name}-@{app.version}-r${svn.lastCommitRevision}-@{app.qualifier}.war" />
+            <war destfile="${dist.dir}/${date.today}/${war-filename}"
+                 webxml="${web.dir}/WEB-INF/web.xml"
+                 duplicate="preserve">
+                <classes dir="${src.dir}/@{app.profile}" />
+                <classes refid="@{classes.refid}" />
+                <zipfileset dir="${web.dir}">
+                    <include name="**/*.*" />
+                    <exclude name="**/web.xml" />
+                    <exclude name="**/classes/**" />
+                </zipfileset>
+                <manifest>
+                    <attribute name="Built-By" value="${user.name}" />
+                    <attribute name="Implementation-Title" value="@{app.name}" />
+                    <attribute name="Implementation-Vendor" value="@{app.vendor}" />
+                    <attribute name="Implementation-Version" value="@{app.version}" />
+                    <attribute name="Implementation-Qualifier" value="@{app.qualifier}" />
+                    <attribute name="Implementation-Profile" value="@{app.profile}" />
+                    <attribute name="Implementation-Timestamp" value="${date.today}" />
+                    <attribute name="Implementation-Revision" value="r${svn.lastCommitRevision}" />
+                </manifest>
+            </war>
+
+            <property name="remotedir" value="${ftp.dir}/@{app.qualifier}/@{app.name}/${app.version.major}" />
+            <upload-file dir="${dist.dir}/${date.today}" filename="${war-filename}" remotedir="${remotedir}" />
+            <!--
+                <svn-tag app.version="@{app.version}" app.qualifier="@{app.qualifier}" />
+            -->
+        </sequential>
+    </macrodef>
+
+    <scriptdef name="replacevalue" language="javascript">
+        <attribute name="text" />
+        <attribute name="regex" />
+        <attribute name="replacement" />
+        <attribute name="property" />
+        <![CDATA[
+                 var text = attributes.get("text");
+                 var regex = attributes.get("regex");
+                 var replacement = attributes.get("replacement");
+                 project.setProperty(attributes.get("property"), text.replaceFirst(regex, replacement));
+        ]]>
+    </scriptdef>
+
+    <macrodef name="dist-app" description="Macrodef for creating zip and tar.gz for distribution">
+        <attribute name="app.name" default="${app.name}" />
+        <attribute name="app.version" />
+
+        <sequential>
+            <antcall target="clean-build" />
+
+            <mkdir dir="${dist.dir}" />
+            <property name="archive.name" value="@{app.name}-@{app.version}" />
+            <property name="archive.target" value="${dist.dir}/${archive.name}" />
+            <zip zipfile="${archive.target}.zip">
+                <zipfileset prefix="@{app.name}" dir="${basedir}">
+                    <patternset id="srcfiles">
+                        <include name="**" />
+                        <exclude name="*.log" />
+                        <exclude name="**/*~" />
+                        <exclude name="**/*.bak" />
+                        <exclude name="${build.dir}/**" />
+                        <exclude name="${dist.dir}/**" />
+                        <exclude name=".*/**" />
+                        <exclude name=".#**" />
+                        <exclude name="bin/**/*" />
+                    </patternset>
+                </zipfileset>
+            </zip>
+            <tar tarfile="${archive.target}.tar">
+                <tarfileset dir="${basedir}" prefix="@{app.name}">
+                    <patternset refid="srcfiles" />
+                </tarfileset>
+            </tar>
+            <gzip zipfile="${archive.target}.tar.gz" src="${archive.target}.tar" />
+            <delete file="${archive.target}.tar" />
+        </sequential>
+    </macrodef>
+
+    <svnSetting id="svn.settings"
+                svnkit="true"
+                username="${svn.username}"
+                password="${svn.password}"
+                javahl="true"
+                failonerror="true" />
+
+    <macrodef name="svn-update" description="Macrodef for svn update">
+        <sequential>
+            <svn refid="svn.settings">
+                <update dir="${basedir}" />
+            </svn>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="svn-status" description="Macrodef for svn status">
+        <sequential>
+            <svn refid="svn.settings">
+                <update dir="${basedir}" />
+                <status path="${basedir}"
+                        revisionProperty="svn.revision"
+                        lastChangedRevisionProperty="svn.lastCommitRevision" />
+            </svn>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="svn-tag" description="Macrodef for svn tag">
+        <attribute name="app.version" />
+        <attribute name="app.qualifier" />
+        <sequential>
+            <if>
+                <equals arg1="${svn.repos.branch}" arg2="" trim="true" />
+                <then>
+                    <input message="Which branch name do you want tag? (e.g. trunk, branches/2.3)"
+                           addproperty="branch.name" />
+                    <condition property="do.abort">
+                        <equals arg1="" arg2="${branch.name}" trim="true" />
+                    </condition>
+                    <fail if="do.abort">Build aborted! The branch name must be specified.</fail>
+                </then>
+                <else>
+                    <property name="branch.name" value="${svn.repos.branch}" />
+                </else>
+            </if>
+
+            <tstamp>
+                <format property="tag.suffix.tstamp" pattern="${svn.tag.suffix.tstamp}" />
+            </tstamp>
+
+            <svn-status />
+
+            <property name="tag.name"
+                      value="${app.name}-@{app.version}-r${svn.lastCommitRevision}-@{app.qualifier}-${tag.suffix.tstamp}" />
+
+            <!-- 先进行 info 操作，判断同名 tag 是否存在，如果存在会抛出异常 -->
+            <!-- 捕获异常之后，进行创建 tag 操作 -->
+            <trycatch>
+                <try>
+                    <svn refid="svn.settings">
+                        <info target="${svn.repos}/tags/${tag.name}" />
+                    </svn>
+                </try>
+                <catch>
+                    <svn refid="svn.settings">
+                        <copy srcUrl="${svn.repos}/${branch.name}"
+                              destUrl="${svn.repos}/tags/${tag.name}"
+                              message="Tag for version @{app.version} @{app.qualifier}." />
+                    </svn>
+                </catch>
+            </trycatch>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="svn-checkout" description="Macrodef for svn checkout">
+        <attribute name="dest.dir" default="${basedir}" />
+        <sequential>
+            <input message="Which branch path do you want checkout?" addproperty="branch.path" />
+            <condition property="do.abort">
+                <equals arg1="" arg2="${branch.path}" trim="true" />
+            </condition>
+            <fail if="do.abort">Build aborted! The branch path must be specified.</fail>
+
+            <svn refid="svn.settings">
+                <checkout url="${svn.repos}/${branch.path}" destPath="@{dest.dir}" />
+            </svn>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="upload-file" description="Macrodef for upload file">
+        <attribute name="dir" />
+        <attribute name="filename" />
+        <attribute name="remotedir" default="${ftp.dir}" />
+        <sequential>
+            <echo message="Uploading @{filename} to remotedir: @{remotedir}" />
+            <ftp-upload ftp.dir="@{remotedir}">
+                <filesets>
+                    <fileset dir="${basedir}/@{dir}">
+                        <include name="@{filename}" />
+                    </fileset>
+                </filesets>
+            </ftp-upload>
+        </sequential>
+    </macrodef>
+
+    <macrodef name="ftp-upload" description="Macrodef for upload file">
+        <attribute name="ftp.host" default="${ftp.host}" />
+        <attribute name="ftp.port" default="${ftp.port}" />
+        <attribute name="ftp.dir" default="${ftp.dir}" />
+        <attribute name="ftp.user" default="${ftp.user}" />
+        <attribute name="ftp.pass" default="${ftp.pass}" />
+        <element name="filesets" description="The upload filesets" />
+        <sequential>
+            <ftp server="@{ftp.host}"
+                 port="@{ftp.port}"
+                 remotedir="@{ftp.dir}"
+                 userid="@{ftp.user}"
+                 password="@{ftp.pass}"
+                 depends="true"
+                 verbose="true">
+                <filesets />
+            </ftp>
+        </sequential>
+    </macrodef>
+
+    <target name="clean-build" description="Clean build output directories">
+        <delete dir="${build.dir}" />
+    </target>
+
+    <target name="clean-today" depends="clean-build" description="Clean today's output directories">
+        <delete dir="${dist.dir}/${date.today}" />
+    </target>
+
+    <target name="clean" depends="clean-build" description="Clean all output directories">
+        <delete dir="${dist.dir}" />
+    </target>
+
+    <target name="compile" description="Compile source files">
+        <compile />
+    </target>
+
+    <target name="upload-war-today" description="Upload today's WARs to the ftp server">
+        <ftp-upload>
+            <filesets>
+                <fileset dir="${dist.dir}/${date.today}">
+                    <include name="*.war" />
+                </fileset>
+            </filesets>
+        </ftp-upload>
+    </target>
+
+</project>
